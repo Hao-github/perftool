@@ -42,7 +42,6 @@ timespec operator-(const timespec &lhs, const timespec &rhs)
     }
     return delta;
 }
-
 timespec operator/(const timespec &lhs, const int &rhs)
 {
     
@@ -107,7 +106,7 @@ private:
         {
             timeSum = timeSum + time;
         }
-        
+
         logMetricInfo("Max", allOfTimeList[allOfTimeList.size() - 1]);
         logMetricInfo("Min", allOfTimeList[0]);
         logMetricInfo("Mean", timeSum / allOfTimeList.size());
