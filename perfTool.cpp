@@ -44,9 +44,9 @@ timespec operator-(const timespec &lhs, const timespec &rhs)
 }
 timespec operator/(const timespec &lhs, const int &rhs)
 {
-    
-        double timeSum = (lhs.tv_sec + 1e-9 * lhs.tv_nsec) / rhs;
-        return {long(timeSum), long((timeSum - long(timeSum)) * 1e9)};
+
+    double timeSum = (lhs.tv_sec + 1e-9 * lhs.tv_nsec) / rhs;
+    return {long(timeSum), long((timeSum - long(timeSum)) * 1e9)};
 }
 
 class PerfTool
@@ -69,13 +69,13 @@ private:
     int reportTimesCounter = 0, subReportTimesCounter = 0;
     timespec sum, maxDeltaTime, minDeltaTime;
 
-    void logDescribeInfo(void)
+    void logDescribeInfo(bool subReport = false)
     {
         time_t tm;
         time(&tm);
         char tmp[64];
         strftime(tmp, sizeof(tmp), "%Y-%m-%d %H:%M:%S", localtime(&tm));
-        LOG_INFO << '<' << std::string(tmp) << "> " << describe << " statistics";
+        LOG_INFO << '<' << std::string(tmp) << "> " << describe << (subReport ? " sub report " : " ") << "statistics";
     }
 
     void logMetricInfo(const std::string metricName, const timespec &metricData)
@@ -85,24 +85,17 @@ private:
 
     void logOnlineInfo(void)
     {
+        logDescribeInfo(true);
         logMetricInfo("Max", maxDeltaTime);
         logMetricInfo("Min", minDeltaTime);
         logMetricInfo("Mean", sum / subReportTimes);
     }
 
-    void logInfo(void)
+    void logInfo(std::vector<timespec>& allOfTimeList)
     {
-        logDescribeInfo();
-
-        std::vector<timespec> allOfTimeList;
-        for (std::vector<timespec> &partTL : rollingTimeList)
-        {
-            allOfTimeList.insert(allOfTimeList.end(), partTL.begin(), partTL.end());
-        }
-        std::sort(allOfTimeList.begin(), allOfTimeList.end());
         // caculate mean
         timespec timeSum = {0, 0};
-        for (timespec& time : allOfTimeList)
+        for (timespec &time : allOfTimeList)
         {
             timeSum = timeSum + time;
         }
@@ -133,6 +126,16 @@ private:
         }
     }
 
+    std::vector<timespec> getTimeList(void)
+    {
+        std::vector<timespec> allOfTimeList;
+        for (std::vector<timespec> &partTL : rollingTimeList)
+        {
+            allOfTimeList.insert(allOfTimeList.end(), partTL.begin(), partTL.end());
+        }
+        std::sort(allOfTimeList.begin(), allOfTimeList.end());
+        return allOfTimeList;
+    }
 public:
     PerfTool(const char *describe,
              int reportTimes,
@@ -146,11 +149,11 @@ public:
           bUseCPUClock(bUseCPUClock),
           describe(describe)
     {
-        nanolog::initialize(nanolog::GuaranteedLogger(), get_current_dir_name(), "nanolog", 1);
+        nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', "nanolog", 1);
         char timeMessageList[4][3] = {"ns", "us", "ms", "s"};
         timeScale = pow(1000, unit);
         timeMessage = timeMessageList[unit];
-        windowSize = rolling ? (((rollingWindowSize - 1) / reportTimes + 1) * reportTimes) : reportTimes;
+        windowSize = rolling ? ((rollingWindowSize - 1) / reportTimes + 1) : 1;
         partOfTimeList.resize(reportTimes);
         initOnlineMetrics();
     };
@@ -166,7 +169,7 @@ public:
           describe(describe)
     {
         partOfTimeList.assign((master->partOfTimeList).begin(), (master->partOfTimeList).end());
-        nanolog::initialize(nanolog::GuaranteedLogger(), get_current_dir_name(), "nanolog", 1);
+        nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', "nanolog", 1);
         partOfTimeList.resize(reportTimes);
         initOnlineMetrics();
     };
@@ -184,7 +187,8 @@ public:
         }
         else
         {
-            beginTime = {(long)rdtsc(), 0};
+            __u64 timeFromRDTSC = rdtsc() / 2;
+            beginTime = {long(timeFromRDTSC / int(1e9)), long(timeFromRDTSC % int(1e9))};
         }
     }
     void end(uint64_t time = 0)
@@ -195,7 +199,8 @@ public:
         }
         else
         {
-            endTime = {(long)rdtsc(), 0};
+            __u64 timeFromRDTSC = rdtsc() / 2;
+            endTime = {long(timeFromRDTSC / int(1e9)), long(timeFromRDTSC % int(1e9))};
         }
     };
 
@@ -217,11 +222,6 @@ public:
             subReportTimesCounter = 0;
         }
 
-        if (bForce == true || subReportTimesCounter == 0)
-        {
-            logOnlineInfo();
-            initOnlineMetrics();
-        }
         if (bForce == true || reportTimesCounter == 0)
         {
             rollingTimeList.push_back(partOfTimeList);
@@ -229,7 +229,17 @@ public:
             {
                 rollingTimeList.pop_front();
             }
-            logInfo();
+
+            std::vector<timespec> allOfTimeList = getTimeList();
+            logInfo(allOfTimeList);
+        }
+        if (subReportTimesCounter == 0)
+        {
+            if (reportTimesCounter != 0)
+            {
+                logOnlineInfo();
+            }
+            initOnlineMetrics();
         }
     };
 
@@ -238,12 +248,7 @@ public:
         std::ofstream file("perfTool.json");
         cereal::JSONOutputArchive archive(file);
 
-        std::vector<timespec> allOfTimeList;
-        for (std::vector<timespec> &partTL : rollingTimeList)
-        {
-            allOfTimeList.insert(allOfTimeList.end(), partTL.begin(), partTL.end());
-        }
-        std::sort(allOfTimeList.begin(), allOfTimeList.end());
+        std::vector<timespec> allOfTimeList = getTimeList();
 
         archive(cereal::make_nvp("Max", allOfTimeList[allOfTimeList.size() - 1].tv_sec),
                 cereal::make_nvp("Min", allOfTimeList[0].tv_sec),
@@ -256,15 +261,13 @@ public:
 
 int main(void)
 {
-    PerfTool ttt = PerfTool("test",2, 1);
-    for (int i = 0; i < 4; ++i)
+    PerfTool ttt = PerfTool("test", 4, 2, 4, false);
+    for (int i = 0; i < 8; ++i)
     {
         ttt.begin();
-        sleep(1 + i);
+        sleep(1);
         ttt.end();
         ttt.report();
     }
     ttt.analysisReport(true);
 }
-
-// rolling analysisReport尚未完成
