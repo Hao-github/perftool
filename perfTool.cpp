@@ -312,18 +312,3 @@ public:
         }
     };
 };
-
-// int main(void)
-// {
-//     PerfTool ttt = PerfTool("test", 10, 5, 30, true, 0, false);
-//     for (int i = 0; i < 100; ++i)
-//     {
-//         ttt.begin();
-//         for (int j = 0; j < 1000; ++j)
-//             ;
-//         ttt.end();
-//         ttt.report();
-//     }
-//     ttt.analysisReport(true);
-//     return 0;
-// }
