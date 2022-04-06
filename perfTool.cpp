@@ -6,6 +6,7 @@
 
 #include <cereal/archives/json.hpp>
 #include <cereal/types/string.hpp>
+#include <iostream>
 #include <fstream>
 
 static __u64 rdtsc()
@@ -99,17 +100,18 @@ private:
     }
 
     // log All information
-    void logInfo()
+    void logInfo(void)
     {
         std::vector<timespec> allOfTimeList = getTimeList();
         // caculate mean
         timespec timeSum = {0, 0};
         // 去除最大值与最小值
-        for (auto iter = allOfTimeList.begin(); iter != allOfTimeList.end(); ++iter)
+        for (auto iter = allOfTimeList.begin() + 1; iter != allOfTimeList.end() - 1; ++iter)
         {
             timeSum = timeSum + *iter;
         }
 
+        logDescribeInfo(false);
         logMetricInfo("Max", allOfTimeList[allOfTimeList.size() - 1]);
         logMetricInfo("Min", allOfTimeList[0]);
         logMetricInfo("Mean", timeSum / allOfTimeList.size());
@@ -119,6 +121,20 @@ private:
         logMetricInfo("25%", allOfTimeList[long(allOfTimeList.size() * 0.25)]);
     }
 
+    void logAnalysisInfo(void)
+    {
+        std::ofstream file(describe + ".json", std::ios::app);
+        cereal::JSONOutputArchive archive(file);
+
+        std::vector<timespec> allOfTimeList = getTimeList();
+
+        archive(cereal::make_nvp("Max", allOfTimeList[allOfTimeList.size() - 1].tv_nsec),
+                cereal::make_nvp("Min", allOfTimeList[0].tv_nsec),
+                cereal::make_nvp("95%", allOfTimeList[long(allOfTimeList.size() * 0.95)].tv_nsec),
+                cereal::make_nvp("75%", allOfTimeList[long(allOfTimeList.size() * 0.75)].tv_nsec),
+                cereal::make_nvp("50%", allOfTimeList[long(allOfTimeList.size() * 0.50)].tv_nsec),
+                cereal::make_nvp("25%", allOfTimeList[long(allOfTimeList.size() * 0.25)].tv_nsec));
+    }
     // init all Online Metrics
     void initOnlineMetrics(void)
     {
@@ -147,19 +163,18 @@ private:
 
     // be used in begin() and end() to get the time by function clock_gettime()
     // selfTime: which paramater to store the time
-    // time: use parameter time if passed
-    void getTimeByFunction(timespec &selfTime, u_int64_t time = 0)
+    void getTimeByFunction(timespec &selfTime)
     {
-        if (time == 0)
-        {
-            clock_gettime(CLOCK_REALTIME, &selfTime);
-        }
-        else
-        {
-            selfTime = {long(time), 0};
-        }
+        clock_gettime(CLOCK_REALTIME, &selfTime);
     }
 
+    // be used in begin() and end() to get the time by rdtsc()
+    // selfTime: which paramater to store the time
+    void getTimeByRDTSC(timespec &selfTime)
+    {
+        __u64 timeFromRDTSC = rdtsc() / 2;
+        selfTime = {long(timeFromRDTSC / int(1e9)), long(timeFromRDTSC % int(1e9))};
+    }
     // get all the time
     std::vector<timespec> getTimeList(void)
 
@@ -193,7 +208,7 @@ public:
           bUseCPUClock(bUseCPUClock),
           describe(describe)
     {
-        nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', "nanolog", 1);
+        nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', describe, 1);
         char timeMessageList[4][3] = {"ns", "us", "ms", "s"};
         timeScale = pow(1000, unit);
         timeMessage = timeMessageList[unit];
@@ -214,7 +229,7 @@ public:
           describe(describe)
     {
         partOfTimeList.assign((master->partOfTimeList).begin(), (master->partOfTimeList).end());
-        nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', "nanolog", 1);
+        nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', describe, 1);
         partOfTimeList.resize(reportTimes);
         initOnlineMetrics();
     };
@@ -228,26 +243,32 @@ public:
     // need an extreme fast implementation
     void begin(uint64_t time = 0)
     {
-        if (bUseCPUClock == false)
+        if (time != 0)
         {
-            getTimeByFunction(beginTime, time);
+            beginTime = {long(time), 0};
+        }
+        else if (bUseCPUClock == false)
+        {
+            getTimeByFunction(beginTime);
         }
         else
         {
-            __u64 timeFromRDTSC = rdtsc() / 2;
-            beginTime = {long(timeFromRDTSC / int(1e9)), long(timeFromRDTSC % int(1e9))};
+            getTimeByRDTSC(beginTime);
         }
     }
     void end(uint64_t time = 0)
     {
-        if (bUseCPUClock == false)
+        if (time != 0)
         {
-            getTimeByFunction(endTime, time);
+            endTime = {long(time), 0};
+        }
+        else if (bUseCPUClock == false)
+        {
+            getTimeByFunction(endTime);
         }
         else
         {
-            __u64 timeFromRDTSC = rdtsc() / 2;
-            endTime = {long(timeFromRDTSC / int(1e9)), long(timeFromRDTSC % int(1e9))};
+            getTimeByRDTSC(endTime);
         }
     };
 
@@ -282,33 +303,27 @@ public:
         updateOnlineMetrics();
         if (bForce == true || reportTimesCounter == 0)
         {
-            std::ofstream file("perfTool.json");
-            cereal::JSONOutputArchive archive(file);
-
-            std::vector<timespec> allOfTimeList = getTimeList();
-
-            archive(cereal::make_nvp("Max", allOfTimeList[allOfTimeList.size() - 1].tv_sec),
-                    cereal::make_nvp("Min", allOfTimeList[0].tv_sec),
-                    cereal::make_nvp("95%", allOfTimeList[long(allOfTimeList.size() * 0.95)].tv_sec),
-                    cereal::make_nvp("75%", allOfTimeList[long(allOfTimeList.size() * 0.75)].tv_sec),
-                    cereal::make_nvp("50%", allOfTimeList[long(allOfTimeList.size() * 0.50)].tv_sec),
-                    cereal::make_nvp("25%", allOfTimeList[long(allOfTimeList.size() * 0.25)].tv_sec));
-            file.close();
+            rollingTimeList.push_back(partOfTimeList);
+            if (rollingTimeList.size() > windowSize)
+            {
+                rollingTimeList.pop_front();
+            }
+            logAnalysisInfo();
         }
     };
 };
 
-int main(void)
-{
-    PerfTool ttt = PerfTool("test", 10, 5, 30, true, 0, false);
-    for (int i = 0; i < 100; ++i)
-    {
-        ttt.begin();
-        for (int j = 0; j < 1000; ++j)
-            ;
-        ttt.end();
-        ttt.report();
-    }
-    ttt.analysisReport(true);
-    return 0;
-}
+// int main(void)
+// {
+//     PerfTool ttt = PerfTool("test", 10, 5, 30, true, 0, false);
+//     for (int i = 0; i < 100; ++i)
+//     {
+//         ttt.begin();
+//         for (int j = 0; j < 1000; ++j)
+//             ;
+//         ttt.end();
+//         ttt.report();
+//     }
+//     ttt.analysisReport(true);
+//     return 0;
+// }
