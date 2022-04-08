@@ -8,7 +8,7 @@
 #include <cereal/types/string.hpp>
 #include <iostream>
 #include <fstream>
-
+const int RDTSC_PARAMETER = 2 * 1e9;
 static __u64 rdtsc()
 {
     __u32 lo, hi;
@@ -55,7 +55,7 @@ class PerfTool
 {
 private:
     timespec beginTime = {0, 0}, endTime = {0, 0};
-    // Paramaters initialize
+    // paramaters initialize
     const std::string describe;
     const bool bUseCPUClock;
     const int reportTimes, subReportTimes;
@@ -71,26 +71,26 @@ private:
     int reportTimesCounter = 0, subReportTimesCounter = 0;
     timespec sum, maxDeltaTime, minDeltaTime;
 
-    // log Description information
+    // log description information
     // subReport: report online metrics information
-    void logDescribeInfo(bool subReport = false)
+    void logDescribeInfo(const bool subReport = false)
     {
         time_t tm;
         time(&tm);
         char tmp[64];
         strftime(tmp, sizeof(tmp), "%Y-%m-%d %H:%M:%S", localtime(&tm));
-        LOG_INFO << '<' << std::string(tmp) << "> " << describe << (subReport ? " sub report " : " ") << "statistics";
+        LOG_INFO << '<' << tmp << "> " << describe << (subReport ? " sub report " : " ") << "statistics";
     }
 
-    // log Metrics information
+    // log metrics information
     // metricName: the name of the metric
     // metricData: the data of the metric
-    void logMetricInfo(const std::string metricName, const timespec &metricData)
+    void logMetricInfo(const std::string &metricName, const timespec &metricData)
     {
         LOG_INFO << metricName << ":" << metricData.tv_sec << "s" << metricData.tv_nsec / timeScale << timeMessage;
     }
 
-    // log Online information
+    // log online information
     void logOnlineInfo(void)
     {
         logDescribeInfo(true);
@@ -99,7 +99,7 @@ private:
         logMetricInfo("Mean", sum / subReportTimes);
     }
 
-    // log All information
+    // log all information
     void logInfo(void)
     {
         std::vector<timespec> allOfTimeList = getTimeList();
@@ -135,13 +135,14 @@ private:
                 cereal::make_nvp("50%", allOfTimeList[long(allOfTimeList.size() * 0.50)].tv_nsec),
                 cereal::make_nvp("25%", allOfTimeList[long(allOfTimeList.size() * 0.25)].tv_nsec));
     }
-    // init all Online Metrics
+    
+    // init all online Metrics
     void initOnlineMetrics(void)
     {
         sum = {0, 0}, maxDeltaTime = {0, 0}, minDeltaTime = {LONG_MAX, 0};
     }
 
-    // update the Online Metrics and add the counter
+    // update the online metrics and add the counter
     void updateOnlineMetrics(void)
     {
         const struct timespec deltaTime = endTime - beginTime;
@@ -161,6 +162,15 @@ private:
         }
     }
 
+    // update all metrics
+    void updateMetrics(void)
+    {
+        rollingTimeList.push_back(partOfTimeList);
+        if (rollingTimeList.size() > windowSize)
+        {
+            rollingTimeList.pop_front();
+        }
+    }
     // be used in begin() and end() to get the time by function clock_gettime()
     // selfTime: which paramater to store the time
     void getTimeByFunction(timespec &selfTime)
@@ -168,16 +178,16 @@ private:
         clock_gettime(CLOCK_REALTIME, &selfTime);
     }
 
-    // be used in begin() and end() to get the time by rdtsc()
+    // be used in begin() and end() to get the time by function rdtsc()
     // selfTime: which paramater to store the time
     void getTimeByRDTSC(timespec &selfTime)
     {
-        __u64 timeFromRDTSC = rdtsc() / 2;
-        selfTime = {long(timeFromRDTSC / int(1e9)), long(timeFromRDTSC % int(1e9))};
+        __u64 timeFromRDTSC = rdtsc();
+        selfTime = {long(timeFromRDTSC / RDTSC_PARAMETER), long(timeFromRDTSC % RDTSC_PARAMETER)};
     }
+
     // get all the time
     std::vector<timespec> getTimeList(void)
-
     {
         std::vector<timespec> allOfTimeList;
         for (std::vector<timespec> &partTL : rollingTimeList)
@@ -256,6 +266,7 @@ public:
             getTimeByRDTSC(beginTime);
         }
     }
+
     void end(uint64_t time = 0)
     {
         if (time != 0)
@@ -273,17 +284,13 @@ public:
     };
 
     // report was actuallly perform when the call times reaches (subReportTimes or reportTimes)
-    // bForce: caland report immediately
+    // bForce: calculate and report immediately
     void report(bool bForce = false)
     {
         updateOnlineMetrics();
         if (bForce == true || reportTimesCounter == 0)
         {
-            rollingTimeList.push_back(partOfTimeList);
-            if (rollingTimeList.size() > windowSize)
-            {
-                rollingTimeList.pop_front();
-            }
+            updateMetrics();
             logInfo();
         }
         if (subReportTimesCounter == 0)
@@ -303,27 +310,8 @@ public:
         updateOnlineMetrics();
         if (bForce == true || reportTimesCounter == 0)
         {
-            rollingTimeList.push_back(partOfTimeList);
-            if (rollingTimeList.size() > windowSize)
-            {
-                rollingTimeList.pop_front();
-            }
+            updateMetrics();
             logAnalysisInfo();
         }
     };
 };
-
-// int main(void)
-// {
-//     PerfTool ttt = PerfTool("test", 10, 5, 30, true, 0, false);
-//     for (int i = 0; i < 100; ++i)
-//     {
-//         ttt.begin();
-//         for (int j = 0; j < 1000; ++j)
-//             ;
-//         ttt.end();
-//         ttt.report();
-//     }
-//     ttt.analysisReport(true);
-//     return 0;
-// }
