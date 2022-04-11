@@ -8,7 +8,10 @@
 #include <cereal/types/string.hpp>
 #include <iostream>
 #include <fstream>
+
 const int RDTSC_PARAMETER = 2 * 1e9;
+const char TIME_MESSAGE_LIST[4][3] = {"ns", "us", "ms", "s"};
+
 static __u64 rdtsc()
 {
     __u32 lo, hi;
@@ -24,6 +27,7 @@ static bool operator<(const timespec &lhs, const timespec &rhs)
     else
         return lhs.tv_sec < rhs.tv_sec;
 }
+
 static timespec operator+(const timespec &lhs, const timespec &rhs)
 {
     timespec sum = {lhs.tv_sec + rhs.tv_sec, lhs.tv_nsec + rhs.tv_nsec};
@@ -34,6 +38,7 @@ static timespec operator+(const timespec &lhs, const timespec &rhs)
     }
     return sum;
 }
+
 static timespec operator-(const timespec &lhs, const timespec &rhs)
 {
     timespec delta = {lhs.tv_sec - rhs.tv_sec, lhs.tv_nsec - rhs.tv_nsec};
@@ -44,6 +49,7 @@ static timespec operator-(const timespec &lhs, const timespec &rhs)
     }
     return delta;
 }
+
 static timespec operator/(const timespec &lhs, const int &rhs)
 {
 
@@ -56,14 +62,13 @@ class PerfTool
 private:
     timespec beginTime = {0, 0}, endTime = {0, 0};
     // paramaters initialize
-    const std::string describe;
     const bool bUseCPUClock;
     const int reportTimes, subReportTimes;
     int windowSize;
 
     // control output
-    long timeScale;
-    std::string timeMessage;
+    const std::string describe, timeMessage;
+    const long timeScale;
 
     // metrics initialize
     std::vector<timespec> partOfTimeList;
@@ -123,7 +128,7 @@ private:
 
     void logAnalysisInfo(void)
     {
-        std::ofstream file(describe + ".json", std::ios::app);
+        std::ofstream file(describe + ".json", std::ios::app);  
         cereal::JSONOutputArchive archive(file);
 
         std::vector<timespec> allOfTimeList = getTimeList();
@@ -171,6 +176,7 @@ private:
             rollingTimeList.pop_front();
         }
     }
+
     // be used in begin() and end() to get the time by function clock_gettime()
     // selfTime: which paramater to store the time
     void getTimeByFunction(timespec &selfTime)
@@ -216,12 +222,11 @@ public:
         : reportTimes(reportTimes),
           subReportTimes(subReportTimes),
           bUseCPUClock(bUseCPUClock),
-          describe(describe)
+          describe(describe),
+          timeMessage(TIME_MESSAGE_LIST[unit]),
+          timeScale(pow(1000, unit))
     {
         nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', describe, 1);
-        char timeMessageList[4][3] = {"ns", "us", "ms", "s"};
-        timeScale = pow(1000, unit);
-        timeMessage = timeMessageList[unit];
         windowSize = rolling ? ((rollingWindowSize - 1) / reportTimes + 1) : 1;
         partOfTimeList.resize(reportTimes);
         initOnlineMetrics();
@@ -232,11 +237,11 @@ public:
              PerfTool *master)
         : reportTimes(master->reportTimes),
           subReportTimes(master->subReportTimes),
-          timeScale(master->timeScale),
-          timeMessage(master->timeMessage),
           bUseCPUClock(master->bUseCPUClock),
           windowSize(master->windowSize),
-          describe(describe)
+          describe(describe),
+          timeScale(master->timeScale),
+          timeMessage(master->timeMessage)
     {
         partOfTimeList.assign((master->partOfTimeList).begin(), (master->partOfTimeList).end());
         nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', describe, 1);
