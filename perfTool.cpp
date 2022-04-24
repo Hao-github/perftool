@@ -1,4 +1,4 @@
-
+// TL = TimeList
 #include "NanoLog.hpp"
 #include <bits/stdc++.h>
 #include <unistd.h>
@@ -57,22 +57,26 @@ static timespec operator/(const timespec &lhs, const int &rhs)
     return {long(timeSum), long((timeSum - long(timeSum)) * 1e9)};
 }
 
+static double operator*(const timespec &lhs, const timespec& rhs)
+{
+    
+    return (lhs.tv_sec + 1e-9 * lhs.tv_nsec) * (rhs.tv_sec + 1e-9*rhs.tv_nsec);
+}
 class PerfTool
 {
 private:
     timespec beginTime = {0, 0}, endTime = {0, 0};
     // paramaters initialize
     const bool bUseCPUClock;
-    const int reportTimes, subReportTimes;
-    int windowSize;
+    const int reportTimes, subReportTimes, windowSize;
 
     // control output
     const std::string describe, timeMessage;
     const long timeScale;
 
     // metrics initialize
-    std::vector<timespec> partOfTimeList;
-    std::list<std::vector<timespec>> rollingTimeList;
+    std::multiset<timespec> windowTL;
+    std::vector<timespec> nextTL, lastTL;
     int reportTimesCounter = 0, subReportTimesCounter = 0;
     timespec sum, maxDeltaTime, minDeltaTime;
 
@@ -107,40 +111,51 @@ private:
     // log all information
     void logInfo(void)
     {
-        std::vector<timespec> allOfTimeList = getTimeList();
         // caculate mean
         timespec timeSum = {0, 0};
         // 去除最大值与最小值
-        for (auto iter = allOfTimeList.begin() + 1; iter != allOfTimeList.end() - 1; ++iter)
+        auto iterBegin = windowTL.begin();
+        std::advance(iterBegin, 1);
+        auto iterEnd = windowTL.end();
+        std::advance(iterEnd, -1);
+        for (auto iter = iterBegin; iterBegin != iterEnd; std::advance(iterBegin, 1))
         {
             timeSum = timeSum + *iter;
         }
+        timespec timeMean = timeSum / (windowTL.size() - 2);
+
+        // caculate std
+        double timeStd = 0;
+        for (auto iter = iterBegin; iterBegin != iterEnd; std::advance(iterBegin, 1))
+        {
+            timeStd = timeStd + (*iter - timeMean) * (*iter - timeMean);
+        }
+        timeStd = sqrt(timeStd / (windowTL.size() - 2));
 
         logDescribeInfo(false);
-        logMetricInfo("Max", allOfTimeList[allOfTimeList.size() - 1]);
-        logMetricInfo("Min", allOfTimeList[0]);
-        logMetricInfo("Mean", timeSum / allOfTimeList.size());
-        logMetricInfo("95%", allOfTimeList[long(allOfTimeList.size() * 0.95)]);
-        logMetricInfo("75%", allOfTimeList[long(allOfTimeList.size() * 0.75)]);
-        logMetricInfo("50%", allOfTimeList[long(allOfTimeList.size() * 0.50)]);
-        logMetricInfo("25%", allOfTimeList[long(allOfTimeList.size() * 0.25)]);
+        logMetricInfo("Max", getTimeFromSet(1));
+        logMetricInfo("Min", getTimeFromSet(0));
+        logMetricInfo("Mean", timeSum / windowTL.size());
+        logMetricInfo("std", {long(timeStd), long((timeStd - long(timeStd)) * 1e9)});
+        logMetricInfo("95%", getTimeFromSet(0.95));
+        logMetricInfo("75%", getTimeFromSet(0.75));
+        logMetricInfo("50%", getTimeFromSet(0.50));
+        logMetricInfo("25%", getTimeFromSet(0.25));
     }
 
     void logAnalysisInfo(void)
     {
-        std::ofstream file(describe + ".json", std::ios::app);  
+        std::ofstream file(describe + ".json", std::ios::app);
         cereal::JSONOutputArchive archive(file);
 
-        std::vector<timespec> allOfTimeList = getTimeList();
-
-        archive(cereal::make_nvp("Max", allOfTimeList[allOfTimeList.size() - 1].tv_nsec),
-                cereal::make_nvp("Min", allOfTimeList[0].tv_nsec),
-                cereal::make_nvp("95%", allOfTimeList[long(allOfTimeList.size() * 0.95)].tv_nsec),
-                cereal::make_nvp("75%", allOfTimeList[long(allOfTimeList.size() * 0.75)].tv_nsec),
-                cereal::make_nvp("50%", allOfTimeList[long(allOfTimeList.size() * 0.50)].tv_nsec),
-                cereal::make_nvp("25%", allOfTimeList[long(allOfTimeList.size() * 0.25)].tv_nsec));
+        archive(cereal::make_nvp("Max", getTimeFromSet(1).tv_nsec),
+                cereal::make_nvp("Min", getTimeFromSet(0).tv_nsec),
+                cereal::make_nvp("95%", getTimeFromSet(0.95).tv_nsec),
+                cereal::make_nvp("75%", getTimeFromSet(0.75).tv_nsec),
+                cereal::make_nvp("50%", getTimeFromSet(0.50).tv_nsec),
+                cereal::make_nvp("25%", getTimeFromSet(0.25).tv_nsec));
     }
-    
+
     // init all online Metrics
     void initOnlineMetrics(void)
     {
@@ -151,7 +166,7 @@ private:
     void updateOnlineMetrics(void)
     {
         const struct timespec deltaTime = endTime - beginTime;
-        partOfTimeList[reportTimesCounter] = deltaTime;
+        nextTL[reportTimesCounter] = deltaTime;
 
         sum = sum + deltaTime;
         maxDeltaTime = maxDeltaTime < deltaTime ? deltaTime : maxDeltaTime;
@@ -170,11 +185,18 @@ private:
     // update all metrics
     void updateMetrics(void)
     {
-        rollingTimeList.push_back(partOfTimeList);
-        if (rollingTimeList.size() > windowSize)
+        for (timespec &time : nextTL)
         {
-            rollingTimeList.pop_front();
+            windowTL.insert(time);
         }
+        if (windowTL.size() > (windowSize * reportTimes))
+        {
+            for (timespec &time : lastTL)
+            {
+                windowTL.erase(windowTL.lower_bound(time));
+            }
+        }
+        lastTL = nextTL;
     }
 
     // be used in begin() and end() to get the time by function clock_gettime()
@@ -192,16 +214,9 @@ private:
         selfTime = {long(timeFromRDTSC / RDTSC_PARAMETER), long(timeFromRDTSC % RDTSC_PARAMETER)};
     }
 
-    // get all the time
-    std::vector<timespec> getTimeList(void)
+    timespec getTimeFromSet(const double percent)
     {
-        std::vector<timespec> allOfTimeList;
-        for (std::vector<timespec> &partTL : rollingTimeList)
-        {
-            allOfTimeList.insert(allOfTimeList.end(), partTL.begin(), partTL.end());
-        }
-        std::sort(allOfTimeList.begin(), allOfTimeList.end());
-        return allOfTimeList;
+        return *next(windowTL.begin(), (windowTL.size() - 1) * percent);
     }
 
 public:
@@ -223,12 +238,12 @@ public:
           subReportTimes(subReportTimes),
           bUseCPUClock(bUseCPUClock),
           describe(describe),
+          windowSize((reportTimes * (rolling ? ((rollingWindowSize - 1) / reportTimes + 1) : 1))),
           timeMessage(TIME_MESSAGE_LIST[unit]),
           timeScale(pow(1000, unit))
     {
         nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', describe, 1);
-        windowSize = rolling ? ((rollingWindowSize - 1) / reportTimes + 1) : 1;
-        partOfTimeList.resize(reportTimes);
+        nextTL.resize(reportTimes);
         initOnlineMetrics();
     };
 
@@ -243,15 +258,15 @@ public:
           timeScale(master->timeScale),
           timeMessage(master->timeMessage)
     {
-        partOfTimeList.assign((master->partOfTimeList).begin(), (master->partOfTimeList).end());
+        nextTL.assign((master->nextTL).begin(), (master->nextTL).end());
         nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', describe, 1);
-        partOfTimeList.resize(reportTimes);
+        nextTL.resize(reportTimes);
         initOnlineMetrics();
     };
 
     ~PerfTool()
     {
-        std::vector<timespec>().swap(partOfTimeList);
+        std::vector<timespec>().swap(nextTL);
     };
 
     // use parameter time if passed else get in function
