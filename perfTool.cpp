@@ -189,7 +189,7 @@ private:
         {
             windowTL.insert(time);
         }
-        if (windowTL.size() > (windowSize * reportTimes))
+        if (windowTL.size() > windowSize)
         {
             for (timespec &time : lastTL)
             {
@@ -243,6 +243,7 @@ public:
           timeScale(pow(1000, unit))
     {
         nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', describe, 1);
+        lastTL.resize(reportTimes);
         nextTL.resize(reportTimes);
         initOnlineMetrics();
     };
@@ -258,8 +259,7 @@ public:
           timeScale(master->timeScale),
           timeMessage(master->timeMessage)
     {
-        nextTL.assign((master->nextTL).begin(), (master->nextTL).end());
-        nanolog::initialize(nanolog::GuaranteedLogger(), std::string(get_current_dir_name()) + '/', describe, 1);
+        lastTL.resize(reportTimes);
         nextTL.resize(reportTimes);
         initOnlineMetrics();
     };
